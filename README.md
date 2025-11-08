@@ -17,3 +17,4 @@ chmod +x run.sh
 ./run.sh
 ```
 
+There is also a Python program that analyzes the execution times of a KNN program and plots a 95% confidence interval for each number of threads.
