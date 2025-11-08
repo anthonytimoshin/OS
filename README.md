@@ -3,7 +3,7 @@ Laboratory works for the "Operating Systems" course in the 5th semester at MAI.
 Tutor/Accepted by: Titov Yuri Pavlovich  
 
 ## [Laboratory work № 4. Multithreading](https://github.com/anthonytimoshin/OS/tree/dcd54d815b619a1010a400cf74f117172ad80d48/LR4)
-To run knn.c with different number of threads:
+To run [knn.c](https://github.com/anthonytimoshin/OS/blob/dcd54d815b619a1010a400cf74f117172ad80d48/LR4/knn.c) with different number of threads:
 ```
 gcc -o knn knn.c -lpthread -lm
 ./knn {number of threads}
