@@ -9,7 +9,7 @@ gcc -o knn knn.c -lpthread -lm
 ./knn {number of threads}
 ```
 
-Bash script to run program with 1, 2, 4, 8, 16, 32, 64 threads 100 times to collect statistics.  
+Bash script [run.sh](https://github.com/anthonytimoshin/OS/blob/aa21e362e4d0e1db99032de9ce10ace0887026b6/LR4/run.sh) to run program with 1, 2, 4, 8, 16, 32, 64 threads 100 times to collect statistics.  
 This script also creates .txt files with execution times.
 To run it:
 ```
