@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Компилируем
-gcc -std=c11 -O2 -o knn knn.c -lpthread -lm
+gcc -std=c11 -O2 -o knn knn_simple.c -lpthread -lm
 
 # Массив числа потоков
 THREADS=(1 2 4 8 16 32 64)
