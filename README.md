@@ -36,3 +36,5 @@ As a result we have:
 | 16 | 1.2349 | [1.2148; 1.2550] |
 | **32** | **1.1956** | **[1.1763; 1.2149]** |
 | 64 | 1.4096 | [1.3876; 1.4316] |
+
+The shortest execution time was expected to be with an 8-thread configuration. This is because increasing the number of threads requires more time to create them and distribute the work among them. Therefore, the overhead exceeds the benefit of parallelization. However, as we can see, the shortest execution time is achieved with a 32-thread configuration. Firstly, this is because the program is not 100% CPU-bound. Secondly, the educational and test sets are quite large, and parallelization offsets the overhead of thread creation. Also, with smaller data sets, the load is distributed more evenly. However, increasing the number of threads to 64 results in an increase in execution time, which is due to thread competition and even greater overhead.
