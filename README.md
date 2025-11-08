@@ -17,7 +17,7 @@ chmod +x run.sh
 ./run.sh
 ```
 
-There is also a Python program that analyzes the execution times of a KNN program and plots a 95% confidence interval for each number of threads.   
+There is also a Python program [analyzer.py](https://github.com/anthonytimoshin/OS/blob/3acca5001a456482bab2cc82358e1b8e175d058a/LR4/analyzer.py) that analyzes the execution times of a KNN program and plots a 95% confidence interval for each number of threads.   
 Educational set is 100000 elements, test set is 1000 elements. Apple M1 chip has 8 cores: 4 productive and 4 energy-efficient.  
 As a result we have:
 
