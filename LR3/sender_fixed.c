@@ -1,65 +1,72 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <errno.h>
 
-// ОЧЕНЬ ПРОСТОЙ sender - без ожидания ACK
+#define BUFFER_SIZE 1024
 
 int main(int argc, char *argv[]) {
+    // Проверка количества аргументов командной строки
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <file> <receiver_pid>\n", argv[0]);
-        return 1;
+        fprintf(stderr, "Использование: %s <input_file> <output_fifo>\n", argv[0]);
+        exit(1);
     }
-    
-    FILE *file = fopen(argv[1], "rb");
-    if (!file) {
-        perror("fopen");
-        return 1;
+
+    const char *input_file = argv[1];
+    const char *output_fifo = argv[2];
+
+    // Открытие входного файла в режиме только для чтения
+    int input_fd = open(input_file, O_RDONLY);
+    if (input_fd == -1) {
+        perror("Ошибка открытия входного файла");
+        exit(1);
     }
-    
-    pid_t receiver = atoi(argv[2]);
-    
-    printf("Sender %d: Sending %s to %d\n", 
-           getpid(), argv[1], receiver);
-    
-    int byte_count = 0;
-    int c;
-    
-    // Читаем и отправляем с небольшой задержкой
-    while ((c = fgetc(file)) != EOF) {
-        unsigned char byte = (unsigned char)c;
-        
-        // Отправляем 8 битов
-        for (int i = 7; i >= 0; i--) {
-            int bit = (byte >> i) & 1;
-            
-            if (bit == 0) {
-                kill(receiver, SIGUSR1);
-            } else {
-                kill(receiver, SIGUSR2);
-            }
-            
-            // Небольшая задержка между битами
-            usleep(1000); // 1ms
+
+    // Открытие именованного канала (FIFO) для записи
+    // Блокируется до тех пор, пока другой процесс не откроет канал для чтения
+    int output_fd = open(output_fifo, O_WRONLY);
+    if (output_fd == -1) {
+        perror("Ошибка открытия именованного канала");
+        close(input_fd);
+        exit(1);
+    }
+
+    // Определение размера файла
+    // Перемещение указателя в конец файла и получение позиции
+    off_t file_size = lseek(input_fd, 0, SEEK_END);
+    lseek(input_fd, 0, SEEK_SET);  // Возврат указателя в начало файла
+
+    // Отправка размера файла через канал
+    // Получатель сначала читает размер, чтобы знать, сколько данных ожидать
+    if (write(output_fd, &file_size, sizeof(file_size)) != sizeof(file_size)) {
+        perror("Ошибка записи размера файла");
+        close(input_fd);
+        close(output_fd);
+        exit(1);
+    }
+
+    // Чтение файла блоками и отправка через канал
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_read;
+
+    while ((bytes_read = read(input_fd, buffer, BUFFER_SIZE)) > 0) {
+        // Запись прочитанного блока в канал
+        if (write(output_fd, buffer, bytes_read) != bytes_read) {
+            perror("Ошибка записи в канал");
+            break;
         }
-        
-        byte_count++;
-        
-        if (byte_count % 10 == 0) {
-            printf(".");
-            fflush(stdout);
-        }
     }
-    
-    // Отправляем 8 нулей как маркер конца
-    for (int i = 0; i < 8; i++) {
-        kill(receiver, SIGUSR1);
-        usleep(1000);
+
+    if (bytes_read == -1) {
+        perror("Ошибка чтения файла");
     }
-    
-    fclose(file);
-    
-    printf("\nSender %d finished (%d bytes)\n", getpid(), byte_count);
-    
+
+    // Закрытие файловых дескрипторов
+    close(input_fd);
+    close(output_fd);
+
     return 0;
 }
