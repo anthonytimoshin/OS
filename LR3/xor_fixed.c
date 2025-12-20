@@ -1,217 +1,158 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <string.h>
-#include <fcntl.h>
+#include <errno.h>
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 1024
+#define FIFO1 "fifo1"
+#define FIFO2 "fifo2"
+#define RESULT_FIFO "result_fifo"
 
-// Глобальные переменные - ОДНИ на оба sender'а
-volatile sig_atomic_t bit_ready = 0;
-volatile sig_atomic_t current_bit = 0;
-volatile sig_atomic_t ack_sent = 0;
-volatile pid_t expected_sender = 0;
-
-// Буферы
-unsigned char buffer1[BUFFER_SIZE];
-unsigned char buffer2[BUFFER_SIZE];
-int buffer1_size = 0;
-int buffer2_size = 0;
-
-// Простой обработчик - только отмечает, что бит получен
-void bit_handler(int sig) {
-    current_bit = (sig == SIGUSR2); // SIGUSR2=1, SIGUSR1=0
-    bit_ready = 1;
-}
-
-// Отдельный обработчик для ACK (не используется в получателе)
-void ack_handler(int sig) {
-    // Пустой - просто принимаем ACK
-}
-
-// Функция получения одного байта
-unsigned char receive_byte_simple() {
-    unsigned char byte = 0;
-    
-    for (int i = 0; i < 8; i++) {
-        bit_ready = 0;
-        
-        // Ждём бит (без ACK - упрощаем!)
-        int timeout = 0;
-        while (!bit_ready && timeout < 1000) {
-            usleep(100);
-            timeout++;
-        }
-        
-        if (bit_ready) {
-            byte = (byte << 1) | current_bit;
-        } else {
-            printf("T");
-            return 0; // Таймаут
-        }
+// Функция создания именованного канала (FIFO)
+void create_fifo(const char *fifo_name) {
+    // Создание FIFO с правами доступа 0666 (чтение и запись для всех)
+    // EEXIST - канал уже существует (не совсем ошибка, это означает что канал уже используется кем-то)
+    if (mkfifo(fifo_name, 0666) == -1 && errno != EEXIST) {
+        perror("Ошибка создания именованного канала");
+        exit(1);
     }
-    
-    return byte;
+}
+
+// Функция чтения данных из именованного канала
+void read_from_fifo(const char *fifo_name, char **data, size_t *size) {
+    // Открытие канала для чтения (блокируется до появления источника данных)
+    int fd = open(fifo_name, O_RDONLY);
+    if (fd == -1) {
+        perror("Ошибка открытия именованного канала для чтения");
+        exit(1);
+    }
+
+    // Чтение размера данных (первое что отправляет источник)
+    size_t data_size;
+    if (read(fd, &data_size, sizeof(data_size)) != sizeof(data_size)) {
+        perror("Ошибка чтения размера данных");
+        close(fd);
+        exit(1);
+    }
+
+    // Выделение памяти под данные
+    *data = malloc(data_size);
+    if (*data == NULL) {
+        perror("Ошибка выделения памяти");
+        close(fd);
+        exit(1);
+    }
+
+    // Чтение данных из канала
+    size_t total_read = 0;
+    while (total_read < data_size) {
+        ssize_t bytes_read = read(fd, *data + total_read, data_size - total_read);
+        if (bytes_read <= 0) {
+            perror("Ошибка чтения данных из канала");
+            break;
+        }
+        total_read += bytes_read;
+    }
+
+    *size = data_size;
+    close(fd);
+}
+
+// Функция записи результата в файл
+void write_result(const char *filename, const char *data, size_t size) {
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd == -1) {
+        perror("Ошибка открытия выходного файла");
+        exit(1);
+    }
+
+    // Запись всех данных в файл
+    if (write(fd, data, size) != (ssize_t)size) {
+        perror("Ошибка записи в файл");
+        close(fd);
+        exit(1);
+    }
+
+    close(fd);
 }
 
 int main(int argc, char *argv[]) {
+    // Проверка аргументов командной строки
     if (argc != 4) {
-        printf("Usage: %s <file1> <file2> <output>\n", argv[0]);
-        return 1;
-    }
-    
-    printf("=== XOR via Signals (Working Version) ===\n");
-    printf("Main PID: %d\n\n", getpid());
-    
-    // Устанавливаем ОДИН обработчик для битов
-    signal(SIGUSR1, bit_handler);
-    signal(SIGUSR2, bit_handler);
-    
-    // === Получаем файл 1 ===
-    printf("--- Receiving file 1: %s ---\n", argv[1]);
-    
-    // Создаём pipe для синхронизации
-    int sync_pipe1[2];
-    pipe(sync_pipe1);
-    
-    pid_t sender1 = fork();
-    if (sender1 == 0) {
-        close(sync_pipe1[0]); // закрываем чтение
-        
-        char pid_str[16];
-        sprintf(pid_str, "%d", getppid());
-        
-        // Записываем свой PID в pipe
-        pid_t mypid = getpid();
-        write(sync_pipe1[1], &mypid, sizeof(pid_t));
-        close(sync_pipe1[1]);
-        
-        // Запускаем sender
-        execl("./sender_fixed", "sender_fixed", argv[1], pid_str, NULL);
-        perror("execl failed");
+        fprintf(stderr, "Использование: %s <file1> <file2> <output_file>\n", argv[0]);
         exit(1);
     }
-    
-    close(sync_pipe1[1]);
-    
-    // Читаем PID sender'а
-    pid_t sender1_pid;
-    read(sync_pipe1[0], &sender1_pid, sizeof(pid_t));
-    close(sync_pipe1[0]);
-    
-    printf("Sender1 PID: %d\n", sender1_pid);
-    
-    // Получаем данные
-    int count1 = 0;
-    while (count1 < BUFFER_SIZE) {
-        unsigned char byte = receive_byte_simple();
-        
-        if (byte == 0 && count1 > 100) { // Предполагаем конец
-            break;
-        }
-        
-        buffer1[count1++] = byte;
-        
-        if (count1 % 20 == 0) {
-            printf(".");
-            fflush(stdout);
-        }
-    }
-    
-    buffer1_size = count1;
-    printf("\nReceived %d bytes from file 1\n", buffer1_size);
-    
-    // Ждём завершения sender1
-    int status1;
-    waitpid(sender1, &status1, 0);
-    
-    // === Получаем файл 2 ===
-    printf("\n--- Receiving file 2: %s ---\n", argv[2]);
-    
-    int sync_pipe2[2];
-    pipe(sync_pipe2);
-    
-    pid_t sender2 = fork();
-    if (sender2 == 0) {
-        close(sync_pipe2[0]);
-        
-        char pid_str[16];
-        sprintf(pid_str, "%d", getppid());
-        
-        pid_t mypid = getpid();
-        write(sync_pipe2[1], &mypid, sizeof(pid_t));
-        close(sync_pipe2[1]);
-        
-        execl("./sender_fixed", "sender_fixed", argv[2], pid_str, NULL);
-        perror("execl failed");
+
+    const char *file1 = argv[1];
+    const char *file2 = argv[2];
+    const char *output_file = argv[3];
+
+    // Создание именованных каналов для межпроцессного взаимодействия
+    create_fifo(FIFO1);
+    create_fifo(FIFO2);
+    create_fifo(RESULT_FIFO);
+
+    // Запуск первого процесса reader для обработки file1
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        // В дочернем процессе: замена образа процесса на программу reader
+        execl("./sender_fixed", "sender_fixed", file1, FIFO1, NULL);
+        perror("Ошибка запуска reader для file1");
         exit(1);
     }
-    
-    close(sync_pipe2[1]);
-    
-    pid_t sender2_pid;
-    read(sync_pipe2[0], &sender2_pid, sizeof(pid_t));
-    close(sync_pipe2[0]);
-    
-    printf("Sender2 PID: %d\n", sender2_pid);
-    
-    // Получаем данные
-    int count2 = 0;
-    while (count2 < BUFFER_SIZE) {
-        unsigned char byte = receive_byte_simple();
-        
-        if (byte == 0 && count2 > 100) {
-            break;
-        }
-        
-        buffer2[count2++] = byte;
-        
-        if (count2 % 20 == 0) {
-            printf(".");
-            fflush(stdout);
-        }
+
+    // Запуск второго процесса reader для обработки file2
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        execl("./sender_fixed", "sender_fixed", file2, FIFO2, NULL);
+        perror("Ошибка запуска reader для file2");
+        exit(1);
     }
-    
-    buffer2_size = count2;
-    printf("\nReceived %d bytes from file 2\n", buffer2_size);
-    
-    waitpid(sender2, NULL, 0);
-    
-    // === Выполняем XOR ===
-    printf("\n--- Performing XOR ---\n");
-    
-    int xor_size = (buffer1_size < buffer2_size) ? buffer1_size : buffer2_size;
-    
-    if (xor_size == 0) {
-        printf("Error: No data to XOR\n");
-        return 1;
+
+    // Чтение данных из обоих каналов (блокируется до появления данных)
+    char *data1, *data2;
+    size_t size1, size2;
+
+    read_from_fifo(FIFO1, &data1, &size1);
+    read_from_fifo(FIFO2, &data2, &size2);
+
+    // Определение минимального размера для операции XOR
+    size_t max_size = (size1 > size2) ? size1 : size2;
+
+    // Выделение памяти для результата XOR
+    char *result = malloc(max_size);
+    if (result == NULL) {
+        perror("Ошибка выделения памяти для результата");
+        exit(1);
     }
-    
-    FILE *out = fopen(argv[3], "wb");
-    if (!out) {
-        perror("fopen output");
-        return 1;
+
+    // Выполнение побайтовой операции XOR
+    for (size_t i = 0; i < size1; i++) {
+        result[i] = data1[i%size1] ^ data2[i%size2];
     }
-    
-    printf("XORing %d bytes...\n", xor_size);
-    
-    for (int i = 0; i < xor_size; i++) {
-        unsigned char result = buffer1[i] ^ buffer2[i];
-        fputc(result, out);
-        
-        if (i < 3) {
-            printf("  %02x ^ %02x = %02x\n", buffer1[i], buffer2[i], result);
-        }
-    }
-    
-    fclose(out);
-    
-    printf("\n=== Complete ===\n");
-    printf("Output: %s (%d bytes)\n", argv[3], xor_size);
-    printf("\nTo decrypt: %s %s %s decrypted.txt\n", 
-           argv[0], argv[3], argv[2]);
-    
+
+    // Сохранение результата в файл
+    write_result(output_file, result, size1);
+
+    printf("Обработано %zu байт. Результат сохранен в %s\n", max_size, output_file);
+
+    // Освобождение выделенной памяти
+    free(data1);
+    free(data2);
+    free(result);
+
+    // Ожидание завершения дочерних процессов
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
+    // Удаление именованных каналов из файловой системы
+    unlink(FIFO1);
+    unlink(FIFO2);
+    unlink(RESULT_FIFO);
+
     return 0;
 }
