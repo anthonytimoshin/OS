@@ -1,6 +1,6 @@
 #include <iostream>
 #include <string>
-#include <filesystem>
+#include <cstring>
 #include <dbus/dbus.h>
 
 namespace fs = std::filesystem;
@@ -10,11 +10,18 @@ void showUsage() {
 }
 
 std::string getFileExtension(const std::string& filePath) {
-    fs::path path(filePath);
-    if (path.has_extension()) {
-        return path.extension().string();
+    const char* dot = strrchr(filePath.c_str(), '.');
+    if (!dot) return "";
+    return std::string(dot);
+}
+
+bool fileExists(const std::string& filePath) {
+    FILE* file = fopen(filePath.c_str(), "r");
+    if (file) {
+        fclose(file);
+        return true;
     }
-    return "";
+    return false;
 }
 
 bool sendDbusMessage(const std::string& filePath, const std::string& extension) {
